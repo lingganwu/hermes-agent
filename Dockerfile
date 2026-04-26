@@ -6,7 +6,7 @@ FROM debian:13.4
 ENV PYTHONUNBUFFERED=1
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
 
-# 完整环境 + 回归 0.8 自由度（已包含所有你需要的工具）
+# 完整系统工具
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential nodejs npm python3 ripgrep ffmpeg gcc python3-dev libffi-dev procps git openssh-client docker-cli tini \
@@ -14,7 +14,10 @@ RUN apt-get update && \
         python3-pip python3-venv python-is-python3 \
         && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -u 10000 -m -d /opt/data hermes
+# 创建用户 + 免密 sudo（NAS 友好）
+RUN useradd -u 10000 -m -d /opt/data hermes && \
+    echo "hermes ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/hermes && \
+    chmod 0440 /etc/sudoers.d/hermes
 
 COPY --chmod=0755 --from=gosu_source /gosu /usr/local/bin/
 COPY --chmod=0755 --from=uv_source /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/
@@ -36,10 +39,10 @@ RUN cd web && npm run build
 USER root
 RUN chmod -R a+rX /opt/hermes
 
-# ---------- 关键：预置宽松配置（禁用 Tirith + 所有 0.9+ 安全限制） ----------
+# 预置宽松配置
 COPY --chown=hermes:hermes docker/custom-config.yaml /opt/hermes/hermes_cli/config/default.yaml
 
-# Python 环境
+# Python 依赖
 RUN uv venv && \
     uv pip install --no-cache-dir -e ".[all]" && \
     uv pip install --no-cache-dir requests httpx aiohttp beautifulsoup4 pandas numpy
