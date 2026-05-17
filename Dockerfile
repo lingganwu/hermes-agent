@@ -54,6 +54,31 @@ RUN npm install --prefer-offline --no-audit && \
     (cd ui-tui && npm install --prefer-offline --no-audit) && \
     npm cache clean --force
 
+# ---------- Layer-cached Python dependency install ----------
+# Copy only pyproject.toml + uv.lock so the Python dep resolve + wheel
+# download + native-extension compile layer is cached unless those inputs
+# change.  Before this split the Python install sat after `COPY . .`, so
+# every source-only commit re-did ~4-5 min of dep work on cold builds.
+#
+# README.md is referenced by pyproject.toml's `readme =` field, but it's
+# excluded from the build context by .dockerignore's `*.md`.  uv's build
+# frontend stats the readme path during dep resolution, so we `touch` an
+# empty placeholder — the real README is restored by `COPY . .` below.
+#
+# `uv sync --frozen --no-install-project --extra all` installs only the
+# deps reachable through the composite `[all]` extra (handpicked set
+# intended for the production image).  We do NOT use `--all-extras`:
+# that would pull in `[rl]` (atroposlib + tinker + torch + wandb from
+# git), `[yc-bench]` (another git dep), and `[termux-all]` (Android
+# redundancy), none of which belong in the published container.
+#
+# The editable link is created after the source copy below.
+COPY pyproject.toml uv.lock ./
+RUN touch ./README.md
+RUN uv sync --frozen --no-install-project --extra all
+
+# ---------- Source code ----------
+# .dockerignore excludes node_modules, so the installs above survive.
 COPY --chown=hermes:hermes . .
 
 # Build browser dashboard and terminal UI assets.
@@ -68,19 +93,25 @@ RUN cd web && npm run build && \
 # hermes_cli/main.py succeeds (see #18800). /opt/hermes/web is build-time
 # only (HERMES_WEB_DIST points at hermes_cli/web_dist) and is intentionally
 # not chowned here.
+# The .venv MUST be hermes-writable so lazy_deps.py can install platform
+# packages (discord.py, telegram, slack, etc.) at first gateway boot.
+# Without this, `uv pip install` fails with EACCES and all messaging
+# adapters silently fail to load.  See tools/lazy_deps.py.
 USER root
 RUN chmod -R a+rX /opt/hermes && \
-    chown -R hermes:hermes /opt/hermes/ui-tui /opt/hermes/node_modules
+    chown -R hermes:hermes /opt/hermes/.venv /opt/hermes/ui-tui /opt/hermes/node_modules
 # Start as root so the entrypoint can usermod/groupmod + gosu.
 # If HERMES_UID is unset, the entrypoint drops to the default hermes user (10000).
 
-# 预置宽松配置
+# 预置宽松配置 (来自你的自定义分支)
 COPY --chown=hermes:hermes docker/custom-config.yaml /opt/hermes/hermes_cli/config/default.yaml
 
-# Python 依赖
-RUN uv venv && \
-    uv pip install --no-cache-dir -e ".[all]" && \
-    uv pip install --no-cache-dir requests httpx aiohttp beautifulsoup4 pandas numpy
+# --------- Link hermes-agent itself (editable) ---------
+# 依赖已在之前的 Layer 安装；使用 `--no-deps` 可以实现秒级链接，无需重新下载。
+RUN uv pip install --no-cache-dir --no-deps -e "."
+
+# 安装额外的 Python 依赖 (确保你的数据处理和爬虫脚本可用)
+RUN uv pip install --no-cache-dir requests httpx aiohttp beautifulsoup4 pandas numpy
 
 ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist
 ENV HERMES_HOME=/opt/data
