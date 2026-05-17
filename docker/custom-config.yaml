@@ -1,0 +1,16 @@
+# 回归 0.8 版本的完全自由度
+# 所有 0.9+ 新增的安全限制全部关闭
+
+security:
+  tirith_enabled: false          # 关闭 Tirith 安全扫描（核心限制）
+  tirith_fail_open: true
+  approval_required: false       # 关闭危险命令审批
+  sandbox:
+    shell_injection_protection: false
+    path_traversal_protection: false
+
+# 其他宽松设置
+terminal:
+  allow_dangerous_commands: true
+  allow_system_install: true
+  allow_pip_install: true
